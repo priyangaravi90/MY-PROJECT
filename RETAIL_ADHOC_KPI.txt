@@ -1,0 +1,396 @@
+USE RETAILS;
+SELECT * FROM DEMOGRAPHIC_RAW;
+SELECT * FROM CAMPAIGN_DESC_RAW;
+SELECT * FROM CAMPAIGN_RAW;
+SELECT * FROM PRODUCT_RAW;
+SELECT * FROM COUPON_RAW;
+SELECT * FROM COUPON_REDEMPT_RAW;
+SELECT * FROM TRANSACTION_RAW;
+
+
+select * from CAMPAIGN_DESC_NEW;
+
+select * from COUPON_REDEMPT_NEW;
+
+select * from TRANSACTION_NEW;
+
+-----deparment wise product count
+SELECT DISTINCT(DEPARTMENT),COUNT(*) AS TOTAL_PRODUCT 
+FROM PRODUCT_RAW
+GROUP BY 1
+ORDER BY 2 DESC;
+
+
+/*1.	Customer Demographics KPIs:
+A. Count of unique households: Measure the total number of unique households in the Demographic table.
+B. Household composition distribution: Analyze the distribution of household compositions (HH_COMP_DESC) to understand the composition of households.
+C.	Age distribution: Calculate the percentage or count of customers in different age groups (AGE_DESC).
+D.	Marital status distribution: Analyze the proportion of customers in different marital status categories (MARITAL_STATUS_CODE).
+E.	Income distribution: Determine the distribution of customers across income levels (INCOME_DESC).
+F. Homeownership distribution: Calculate the percentage or count of customers who own or rent their homes (HOMEOWNER_DESC).*/
+
+SELECT COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS FROM DEMOGRAPHIC_RAW; --2,500
+
+SELECT HH_COMP_DESC,COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS 
+FROM DEMOGRAPHIC_RAW
+GROUP BY 1
+ORDER BY 2 DESC;
+
+
+SELECT AGE_DESC,TOTAL_HOUSEHOLDS,ROUND(TOTAL_HOUSEHOLDS/2500 * 100,2) AS PERC_AGEWISE_HOUSEHOLDS_DISTR
+FROM
+(SELECT AGE_DESC,
+COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS
+FROM DEMOGRAPHIC_RAW 
+GROUP BY 1
+ORDER BY 2 DESC)
+GROUP BY 1,2;
+
+SELECT MARITAL_STATUS_CODE , 
+COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS,
+ROUND(COUNT(DISTINCT HOUSEHOLD_KEY) / 2500 * 100 , 2) AS PERC_MARITAL_HOUSEHOLDS_DISTR
+FROM DEMOGRAPHIC_RAW
+GROUP BY 1
+ORDER BY 2 DESC;
+
+SELECT INCOME_DESC , 
+COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS,
+ROUND(COUNT(DISTINCT HOUSEHOLD_KEY) / 2500 * 100 , 2) AS PERC_INCOME_HOUSEHOLDS_DISTR
+FROM DEMOGRAPHIC_RAW
+GROUP BY 1
+ORDER BY 2 DESC;
+
+SELECT HOMEOWNER_DESC , 
+COUNT(DISTINCT HOUSEHOLD_KEY) AS TOTAL_HOUSEHOLDS,
+ROUND(COUNT(DISTINCT HOUSEHOLD_KEY) / 2500 * 100 , 2) AS PERC_HOMEOWNER_DESC_DISTR
+FROM DEMOGRAPHIC_RAW
+GROUP BY 1
+ORDER BY 2 DESC;
+
+
+
+SELECT T.HOUSEHOLD_KEY,D.AGE_DESC,D.MARITAL_STATUS_CODE,D.INCOME_DESC,AVG(T.SALES_VALUE)AS AVG_AMOUNT,
+AVG(T.RETAIL_DISC)AS AVG_RETAIL_DIS,AVG(T.COUPON_DISC)AS AVG_COUPON_DISC,AVG(T.COUPON_MATCH_DISC)AS AVG_COUP_MATCH_DISC
+FROM TRANSACTION_NEW T
+LEFT OUTER JOIN DEMOGRAPHIC_RAW D ON T.HOUSEHOLD_KEY =D.HOUSEHOLD_KEY
+GROUP BY 1,2,3,4
+ORDER BY 1;
+
+CREATE OR REPLACE PROCEDURE Household_kpi()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+ CREATE OR REPLACE TABLE Household_kpi AS (SELECT T.HOUSEHOLD_KEY,D.AGE_DESC,D.MARITAL_STATUS_CODE,D.INCOME_DESC,AVG(T.SALES_VALUE)AS AVG_AMOUNT,
+AVG(T.RETAIL_DISC)AS AVG_RETAIL_DIS,AVG(T.COUPON_DISC)AS AVG_COUPON_DISC,AVG(T.COUPON_MATCH_DISC)AS AVG_COUP_MATCH_DISC
+FROM TRANSACTION_NEW T
+LEFT OUTER JOIN DEMOGRAPHIC_RAW D ON T.HOUSEHOLD_KEY =D.HOUSEHOLD_KEY
+GROUP BY 1,2,3,4
+ORDER BY 1);
+END;
+$$;
+
+SHOW PROCEDURES;
+
+CALL Household_kpi();
+
+CREATE OR REPLACE TASK  Household_kpi_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '5 MINUTE' 
+AS CALL Household_kpi();
+
+
+
+ALTER TASK   Household_kpi_TASK RESUME;
+ALTER TASK  Household_kpi_TASK SUSPEND; 
+
+
+
+---------------------------------------2. Campaign KPIs:--------------------------------------------------------------------------------------------------------------------
+--o Number of campaigns: Count the total number of campaigns in the Campaign table.
+ 
+ SELECT COUNT(DISTINCT CAMPAIGN) AS TOTAL_CAMPAIGN FROM CAMPAIGN_RAW; 
+ 
+--o Campaign duration: Calculate the duration of each campaign by subtracting the start day from the end day (in the Campaign_desc table).
+
+SELECT
+    start_day,
+    end_day,
+    end_day-start_day AS duration
+FROM
+    CAMPAIGN_DESC_RAW;
+
+--o Campaign effectiveness: Analyze the number of households associated with each campaign (in the Campaign table) to measure campaign reach. 
+
+SELECT CAMPAIGN,
+SUM(DISTINCT HOUSEHOLD_KEY) AS CAMPAIGN_REACH
+FROM CAMPAIGN_RAW
+GROUP BY 1
+ORDER BY 1;
+
+SELECT cr.CAMPAIGN,SUM(cr.HOUSEHOLD_KEY) AS CAMPAIGN_REACH,crn.DESCRIPTION,crn.CAMPAIGN_DURATION,crn.START_YEAR,crn.END_YEAR
+FROM CAMPAIGN_RAW cr
+LEFT OUTER JOIN CAMPAIGN_DESC_NEW crn ON cr.CAMPAIGN = crn.CAMPAIGN
+GROUP BY cr.CAMPAIGN, crn.DESCRIPTION, crn.CAMPAIGN_DURATION, crn.START_YEAR, crn.END_YEAR
+ORDER BY cr.CAMPAIGN;
+
+------------------------------------------------------Stored Procedure----------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE Campaign_KPIs()
+RETURNS STRING
+LANGUAGE SQL
+AS
+
+$$
+CREATE OR REPLACE TABLE Campaign_KPIs AS (
+    SELECT
+        cr.CAMPAIGN,
+        SUM(cr.HOUSEHOLD_KEY) AS CAMPAIGN_REACH,
+        crn.DESCRIPTION,
+        crn.CAMPAIGN_DURATION,
+        crn.START_YEAR,
+        crn.END_YEAR
+    FROM
+        CAMPAIGN_RAW cr
+    LEFT OUTER JOIN
+        CAMPAIGN_DESC_NEW crn ON cr.CAMPAIGN = crn.CAMPAIGN
+    GROUP BY
+        cr.CAMPAIGN, crn.DESCRIPTION, crn.CAMPAIGN_DURATION, crn.START_YEAR, crn.END_YEAR
+    ORDER BY
+        cr.CAMPAIGN
+);
+$$; 
+
+SHOW PROCEDURES ;
+
+CALL  Campaign_KPIs();
+
+CREATE OR REPLACE TASK Campaign_KPIs_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '4 MINUTE' 
+AS CALL Campaign_KPIs();
+
+SHOW TASKS;
+
+ALTER TASK  Campaign_KPIs_TASK RESUME;
+ALTER TASK  Campaign_KPIs_TASK SUSPEND; 
+
+
+--------------------------------------------3. Coupon KPIs:-----------------------------------------------------------------------------------------------------------------------------------
+
+--o Coupon redemption rate: Calculate the percentage of coupons redeemed (from the coupon_redempt table) compared to the total number of coupons distributed (from the Coupon table). 
+SELECT
+    (COUNT(DISTINCT cr.COUPON_UPC) * 100.0) / COUNT(DISTINCT c.COUPON_UPC) AS redemption_rate
+FROM
+    COUPON_REDEMPT_RAW cr
+JOIN
+    COUPON_RAW c ON cr.COUPON_UPC = c.COUPON_UPC;
+
+--o Coupon usage by campaign: Measure the number of coupon redemptions (from the coupon_redempt table) for each campaign (in the Coupon table). 
+SELECT
+    c.CAMPAIGN,
+    COUNT(cr.COUPON_UPC) AS redemption_count
+FROM
+    COUPON_REDEMPT_RAW cr
+JOIN
+    COUPON_RAW c ON cr.COUPON_UPC = c.COUPON_UPC
+GROUP BY
+    c.CAMPAIGN;
+    
+------------------------stored procedure---------------------------------
+
+CREATE OR REPLACE PROCEDURE COUPON_KPI()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+ CREATE OR REPLACE  TABLE COUPON_KPI AS (
+
+ SELECT
+    c.CAMPAIGN,
+    COUNT(cr.COUPON_UPC) AS redemption_count
+FROM
+    COUPON_REDEMPT_RAW cr
+JOIN
+    COUPON_RAW c ON cr.COUPON_UPC = c.COUPON_UPC
+GROUP BY
+    c.CAMPAIGN
+    
+);
+ 
+$$;
+
+SHOW PROCEDURES;
+
+CALL COUPON_KPI();
+
+CREATE OR REPLACE TASK COUPON_KPI_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '3 MINUTE' 
+AS CALL COUPON_KPI();
+
+SHOW TASKS;
+
+ALTER TASK  COUPON_KPI_TASK RESUME;
+ALTER TASK COUPON_KPI_TASK SUSPEND; 
+
+
+------------------------------4. Product KPIs: --------------------------------------------------------------------
+
+--o Sales value: Calculate the total sales value for each product (in the Transaction_data table) to identify top-selling products.
+SELECT
+    p.PRODUCT_ID,
+    p.BRAND,
+    p.COMMODITY_DESC,
+    p.SUB_COMMODITY_DESC,
+    SUM(t.SALES_VALUE) AS total_sales_value
+FROM
+    PRODUCT_RAW p
+JOIN
+    TRANSACTION_RAW t ON p.PRODUCT_ID = t.PRODUCT_ID
+GROUP BY
+    p.PRODUCT_ID, p.BRAND, p.COMMODITY_DESC, p.SUB_COMMODITY_DESC
+ORDER BY
+    total_sales_value DESC;
+
+--o Manufacturer distribution: Analyze the distribution of products across different manufacturers (in the Product table). 
+SELECT
+    MANUFACTURER,
+    COUNT(*) AS product_count
+FROM
+    PRODUCT_RAW
+GROUP BY
+    MANUFACTURER
+ORDER BY
+    product_count DESC;
+
+--o Department-wise sales: Measure the sales value by department (in the Product table) to understand which departments contribute most to revenue. 
+SELECT
+    DEPARTMENT,
+    SUM(t.SALES_VALUE) AS department_sales
+FROM
+    PRODUCT_RAW p
+JOIN
+    TRANSACTION_RAW t ON p.PRODUCT_ID = t.PRODUCT_ID
+GROUP BY
+    DEPARTMENT
+ORDER BY
+    department_sales DESC;
+
+
+--o Brand-wise sales: Calculate the sales value for each brand (in the Product table) to identify top-selling brands. 
+SELECT
+    BRAND,
+    SUM(t.SALES_VALUE) AS brand_sales
+FROM
+    PRODUCT_RAW p
+JOIN
+    TRANSACTION_RAW t ON p.PRODUCT_ID = t.PRODUCT_ID
+GROUP BY
+    BRAND
+ORDER BY
+    brand_sales DESC;
+------------------------------------------------------------------------------------------
+SELECT t.PRODUCT_ID,p.BRAND,p.COMMODITY_DESC,p.SUB_COMMODITY_DESC,p.DEPARTMENT,p.MANUFACTURER,COUNT(*) AS product_count,SUM(t.SALES_VALUE) AS total_sales_value
+FROM TRANSACTION_RAW t
+LEFT OUTER JOIN PRODUCT_RAW p ON t.PRODUCT_ID =p.PRODUCT_ID
+GROUP BY 1,2,3,4,5,6
+ORDER BY  total_sales_value DESC;
+
+---------------------------------------------STORED PROCEDURE-------------------------------------------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE PRODUCT_KPI()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+CREATE OR REPLACE TABLE PRODUCT_KPI AS (
+SELECT t.PRODUCT_ID,p.BRAND,p.COMMODITY_DESC,p.SUB_COMMODITY_DESC,p.DEPARTMENT,p.MANUFACTURER,COUNT(*) AS product_count,SUM(t.SALES_VALUE) AS total_sales_value
+FROM TRANSACTION_RAW t
+LEFT OUTER JOIN PRODUCT_RAW p ON t.PRODUCT_ID =p.PRODUCT_ID
+GROUP BY 1,2,3,4,5,6
+ORDER BY  total_sales_value DESC
+);
+END;
+$$;
+
+
+SHOW PROCEDURES;
+
+CALL PRODUCT_KPI();
+
+CREATE OR REPLACE TASK COUPON_KPI_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '6 MINUTE' 
+AS CALL COUPON_KPI();
+
+SHOW TASKS;
+
+ALTER TASK  COUPON_KPI_TASK RESUME;
+ALTER TASK COUPON_KPI_TASK SUSPEND; 
+
+
+
+
+---------------------------------------------------5. Transaction KPIs----------------------------------------------------------------------------------------------
+
+--o Total sales value: Calculate the sum of sales values (in the Transaction_data table) to measure overall revenue. 
+SELECT
+    SUM(SALES_VALUE) AS total_sales_value
+FROM
+    TRANSACTION_RAW;
+
+--o Average transaction value: Calculate the average sales value per transaction to understand customer spending patterns. 
+SELECT
+    AVG(SALES_VALUE) AS average_transaction_value
+FROM
+    TRANSACTION_RAW;
+
+--o Quantity sold: Measure the total quantity sold (in the Transaction_data table) to understand product demand.
+SELECT
+    TRANSACTION
+FROM
+    TRANSACTION_RAW;
+
+
+--o Discounts: Analyze the amount and impact of discounts (RETAIL_DISC, COUPON_DISC, COUPON_MATCH_DISC) on sales value.
+SELECT
+    SUM(RETAIL_DISC) AS total_retail_discount,
+    SUM(COUPON_DISC) AS total_coupon_discount,
+    SUM(COUPON_MATCH_DISC) AS total_coupon_match_discount
+FROM
+    TRANSACTION_RAW;
+
+
+
+---------------------------------------------------------STORED PROCEDURE-------------------------------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE TRANSACTION_KPI()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+CREATE TABLE TRANSACTION_KPI AS(
+SELECT
+    SUM(SALES_VALUE) AS total_sales_value,
+    AVG(SALES_VALUE) AS average_transaction_value,
+    SUM(RETAIL_DISC) AS total_retail_discount,
+    SUM(COUPON_DISC) AS total_coupon_discount,
+    SUM(COUPON_MATCH_DISC) AS total_coupon_match_discount
+FROM TRANSACTION_RAW
+);
+END;
+$$;
+SHOW PROCEDURES;
+
+CALL TRANSACTION_KPI();
+
+CREATE OR REPLACE TASK TRANSACTION_KPI_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = '1 MINUTE' 
+AS CALL TRANSACTION_KPI();
+
+SHOW TASKS;
+
+ALTER TASK  TRANSACTION_KPI_TASK RESUME;
+ALTER TASK TRANSACTION_KPI_TASK SUSPEND; 
